@@ -1,0 +1,89 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: anomaly-backend
+  
+  # 数据源配置 (Docker 环境变量覆盖)
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 默认使用 localhost 开发环境变量，在 docker-compose 里面会被覆盖
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/anomaly_detection?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
+    username: ${SPRING_DATASOURCE_USERNAME:root}
+    password: ${SPRING_DATASOURCE_PASSWORD:root123}
+    hikari:
+      minimum-idle: 5
+      maximum-pool-size: 20
+      connection-timeout: 30000
+
+  # Redis 配置 (Docker 环境变量覆盖)
+  data:
+    redis:
+      host: ${SPRING_REDIS_HOST:localhost}
+      port: ${SPRING_REDIS_PORT:6379}
+      password: ${SPRING_REDIS_PASSWORD:redis123}
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+
+  # RabbitMQ 配置 (Docker 环境变量覆盖)
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:localhost}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:admin}
+    password: ${SPRING_RABBITMQ_PASSWORD:admin123}
+    listener:
+      simple:
+        acknowledge-mode: manual # 手动 ACK 处理，防止消息丢失
+        concurrency: 2
+        max-concurrency: 5
+    template:
+      retry:
+        enabled: true
+        initial-interval: 1000ms
+        max-attempts: 3
+        multiplier: 2.0
+  
+  # 资源上传配置
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
+  # MinIO 对象存储配置
+  minio:
+    url: ${MINIO_URL:http://localhost:9000}
+    access-key: ${MINIO_ACCESS_KEY:root}
+    secret-key: ${MINIO_SECRET_KEY:rootpassword}
+    bucket-name: anomaly-tasks
+
+# MyBatis-Plus 配置
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  global-config:
+    db-config:
+      id-type: auto # 对应数据库表自增
+      table-underline: true
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    map-underscore-to-camel-case: true
+
+# JWT 配置
+jwt:
+  secret: ${JWT_SECRET:anomaly-detection-jwt-secret-key-2024}
+  expiration: 86400000 # 24 小时 (毫秒)
+
+# 日志配置
+logging:
+  level:
+    com.anomaly: debug
+    org.springframework.web: info
+    org.springframework.amqp: info

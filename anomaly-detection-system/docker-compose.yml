@@ -1,0 +1,193 @@
+version: '3.8'
+
+services:
+  # ================= 【基础组件】 =================
+  mysql:
+    image: mysql:8.0
+    container_name: anomaly-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: anomaly_detection
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./infrastructure/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - mysql-data:/var/lib/mysql
+    networks:
+      - anomaly-net
+
+  redis:
+    image: redis:7.0-alpine
+    container_name: anomaly-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --requirepass root123
+    networks:
+      - anomaly-net
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: anomaly-rabbitmq
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - anomaly-net
+
+  minio:
+    image: minio/minio:RELEASE.2023-10-16T04-13-43Z
+    container_name: anomaly-minio
+    restart: always
+    environment:
+      MINIO_ROOT_USER: root
+      MINIO_ROOT_PASSWORD: rootpassword
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - anomaly-net
+
+  # ================= 【核心微服务】 =================
+  backend:
+    build:
+      context: ./backend
+    container_name: anomaly-backend
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:mysql://anomaly-mysql:3306/anomaly_detection?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
+      - SPRING_DATASOURCE_USERNAME=root
+      - SPRING_DATASOURCE_PASSWORD=root
+      - SPRING_REDIS_HOST=anomaly-redis
+      - SPRING_REDIS_PASSWORD=root123
+      - SPRING_RABBITMQ_HOST=anomaly-rabbitmq
+      - SPRING_RABBITMQ_USERNAME=admin
+      - SPRING_RABBITMQ_PASSWORD=admin123
+      - AI_ENGINE_URL=http://anomaly-ai-engine:8000
+      - MINIO_URL=http://anomaly-minio:9000
+    depends_on:
+      - mysql
+      - redis
+      - rabbitmq
+      - minio
+    networks:
+      - anomaly-net
+
+  ai-engine:
+    build:
+      context: ./ai_engine
+    container_name: anomaly-ai-engine
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - RABBITMQ_HOST=anomaly-rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASS=admin123
+      - FUSION_ALPHA=${FUSION_ALPHA:-0.5}
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./ai_engine/dataset:/app/dataset
+      - ai-models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - rabbitmq
+    networks:
+      - anomaly-net
+
+  xai-worker:
+    build:
+      context: ./ai_engine
+    container_name: anomaly-xai-worker
+    restart: always
+    command: python xai_worker.py
+    environment:
+      - RABBITMQ_HOST=anomaly-rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASS=admin123
+      - MYSQL_HOST=anomaly-mysql
+      - SPRING_DATASOURCE_USERNAME=root
+      - SPRING_DATASOURCE_PASSWORD=root
+      - MYSQL_DATABASE=anomaly_detection
+      - TZ=Asia/Shanghai
+    volumes:
+      - ../数据集:/app/dataset
+      - ai-models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - rabbitmq
+      - mysql
+      - ai-engine
+    networks:
+      - anomaly-net
+
+  simulator:
+    build:
+      context: ./simulator
+    container_name: anomaly-simulator
+    restart: always
+    environment:
+      - RABBITMQ_HOST=anomaly-rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASS=admin123
+      - BACKEND_URL=http://anomaly-backend:8080
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./ai_engine/dataset:/app/dataset
+    depends_on:
+      - backend
+      - rabbitmq
+    networks:
+      - anomaly-net
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: anomaly-frontend
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - anomaly-net
+
+networks:
+  anomaly-net:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  redis-data:
+  ai-models:
+  rabbitmq-data:
+  minio-data:
